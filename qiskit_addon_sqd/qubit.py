@@ -220,7 +220,7 @@ def matrix_elements_from_pauli(
     # The bitstrings in bs_mat_conn are "agreement maps" between the original bitstring
     # and the "diag" operator mask, which guarantees they are unique, since the original
     # bitstring matrix is expected to be unique.
-    bs_mat_conn, amplitudes = _connected_elements_and_amplitudes_bool_vmap(
+    bs_mat_conn, amplitudes = _connected_elements_and_amplitudes_bool_vmap_over_bitstrings(
         bitstring_matrix, diag, sign, imag
     )
     # After we calculate the "connected elements" above, we will get the indices
@@ -271,8 +271,14 @@ def _connected_elements_and_amplitudes_bool(
 with 2D arrays of bitstrings through the ``vmap`` transformation of Jax. Also
 JIT compiled.
 """
-_connected_elements_and_amplitudes_bool_vmap = jit(
+_connected_elements_and_amplitudes_bool_vmap_over_bitstrings = jit(
     vmap(_connected_elements_and_amplitudes_bool, (0, None, None, None), 0)
+)
+
+_connected_elements_and_amplitudes_bool_vmap_over_bitstrings_and_paulis = jit(
+    vmap(
+        vmap(_connected_elements_and_amplitudes_bool, (0, None, None, None), 0), (None, 0, 0, 0), 0
+    )
 )
 
 
