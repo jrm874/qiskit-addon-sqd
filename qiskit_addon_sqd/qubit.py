@@ -13,18 +13,18 @@
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
 """Functions for handling quantum samples."""
 
+import concurrent.futures
+import warnings
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
 from jax import Array, config, jit, vmap
+from numba import njit
 from numpy.typing import NDArray
 from qiskit.quantum_info import Pauli, SparsePauliOp
 from scipy.sparse import coo_matrix, spmatrix
 from scipy.sparse.linalg import eigsh
-from numba import njit
-import warnings
-import concurrent.futures
 
 config.update("jax_enable_x64", True)  # To deal with large integers
 
