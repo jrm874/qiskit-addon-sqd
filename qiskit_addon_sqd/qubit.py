@@ -23,6 +23,7 @@ from qiskit.quantum_info import Pauli, SparsePauliOp
 from scipy.sparse import coo_matrix, spmatrix
 from scipy.sparse.linalg import eigsh
 from numba import njit
+import concurrent.futures
 
 config.update("jax_enable_x64", True)  # To deal with large integers
 
@@ -80,6 +81,7 @@ def project_operator_to_subspace(
     hamiltonian: SparsePauliOp,
     *,
     verbose: bool = False,
+    multithreaded: bool = False,
 ) -> spmatrix:
     """Project a Pauli operator onto a Hilbert subspace defined by the computational basis states (rows) in ``bitstring_matrix``.
 
@@ -107,6 +109,7 @@ def project_operator_to_subspace(
             projected and diagonalized.
         hamiltonian: A Pauli operator to project onto a Hilbert subspace defined by ``bitstring_matrix``.
         verbose: Whether to print the stage of the subroutine.
+        multithreaded: Whether to use concurrent.futures to parallelize over Hamiltonian terms
 
     Return:
         A `scipy.sparse.coo_matrix <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.coo_matrix.html#coo-matrix>`_ representing the operator projected in the subspace. The rows
@@ -118,28 +121,67 @@ def project_operator_to_subspace(
         ValueError: Bitstrings (rows) in ``bitstring_matrix`` must have length < ``64``.
 
     """
-    if bitstring_matrix.shape[1] > 63:
-        raise ValueError("Bitstrings (rows) in bitstring_matrix must have length < 64.")
+    d, n = bitstring_matrix.shape
+    t = len(hamiltonian.coeffs)
 
-    d, _ = bitstring_matrix.shape
+    # Get a qubit-wise representation of the Pauli properties
+    diags = np.zeros((t, n), dtype=bool)
+    signs = np.zeros((t, n), dtype=bool)
+    imags = np.zeros((t, n), dtype=bool)
+    for i, pauli in enumerate(hamiltonian.paulis):
+        diags[i] = np.logical_not(pauli.x)[::-1]
+        signs[i] = pauli.z[::-1]
+        imags[i] = np.logical_and(pauli.x, pauli.z)[::-1]
+
+    bitstring_matrix_conns, amplitudes = (
+        _connected_elements_and_amplitudes_bool_vmap_over_bitstrings_and_paulis(
+            bitstring_matrix, diags, signs, imags
+        )
+    )
+
     operator = coo_matrix((d, d), dtype="complex128")
 
-    for i, pauli in enumerate(hamiltonian.paulis):
-        coefficient = hamiltonian.coeffs[i]
-        if verbose:  # pragma: no cover
-            (
+    # Hash table to identify bitstrings in the subspace with their position in the array
+    string2address_hash = {
+        "".join("1" if bit else "0" for bit in value): index
+        for index, value in enumerate(bitstring_matrix)
+    }
+
+    if multithreaded:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            operator = coo_matrix((d, d), dtype="complex128")
+            for i in range(t):
+                amps = amplitudes[i]
+                bitstring_matrix_conn = bitstring_matrix_conns[i]
+                coeff = hamiltonian.coeffs[i]
+                futures.append(
+                    executor.submit(
+                        _to_coo_operator, d, bitstring_matrix_conn, string2address_hash, amps, coeff
+                    )
+                )
+
+            for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                operator += future.result()
+                if verbose:  # pragma: no cover
+                    print(
+                        f"Projecting term {i+1} out of {hamiltonian.size}: {coeff} * "
+                        + "".join((hamiltonian.paulis[i]).to_label())
+                        + " ..."
+                    )
+    if not multithreaded:
+        operator = coo_matrix((d, d), dtype="complex128")
+        for i in range(t):
+            amps = amplitudes[i]
+            bitstring_matrix_conn = bitstring_matrix_conns[i]
+            coeff = hamiltonian.coeffs[i]
+            operator += _to_coo_operator(d, bitstring_matrix_conn, string2address_hash, amps, coeff)
+            if verbose:  # pragma: no cover
                 print(
-                    f"Projecting term {i+1} out of {hamiltonian.size}: {coefficient} * "
-                    + "".join(pauli.to_label())
+                    f"Projecting term {i+1} out of {hamiltonian.size}: {coeff} * "
+                    + "".join((hamiltonian.paulis[i]).to_label())
                     + " ..."
                 )
-            )
-
-        matrix_elements, row_coords, col_coords = matrix_elements_from_pauli(
-            bitstring_matrix, pauli
-        )
-
-        operator += coefficient * coo_matrix((matrix_elements, (row_coords, col_coords)), (d, d))
 
     return operator
 
@@ -248,14 +290,7 @@ def matrix_elements_from_pauli(
         - The complex amplitudes corresponding to the nonzero matrix elements
         - The row indices corresponding to non-zero matrix elements
         - The column indices corresponding to non-zero matrix elements
-
-    Raises:
-        ValueError: Bitstrings (rows) in ``bitstring_matrix`` must have length < ``64``.
-
     """
-    if bitstring_matrix.shape[1] > 63:
-        raise ValueError("Bitstrings (rows) in bitstring_matrix must have length < 64.")
-
     d, n_qubits = bitstring_matrix.shape
     row_ids = np.arange(d)
 
@@ -265,7 +300,16 @@ def matrix_elements_from_pauli(
     imag = np.logical_and(pauli.x, pauli.z)[::-1]
 
     # Convert bitstrings to integers
-    int_array_rows = _int_conversion_from_bts_matrix_vmap(bitstring_matrix)
+    if bitstring_matrix.shape[1] <= 63:
+        int_array_rows = _int_conversion_from_bts_matrix_vmap(bitstring_matrix)
+    else:
+        bitstring_matrix = np.array(bitstring_matrix)
+        int_array_rows = np.array(
+            [
+                sum(int(bit) * (1 << i) for i, bit in enumerate(bits[::-1]))
+                for bits in bitstring_matrix
+            ]
+        )
 
     # The bitstrings in bs_mat_conn are "agreement maps" between the original bitstring
     # and the "diag" operator mask, which guarantees they are unique, since the original
