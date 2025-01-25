@@ -144,16 +144,17 @@ def project_operator_to_subspace(
     return operator
 
 
-def _to_coo_operator(d, connected_bs, my_dict_strings, amplitudes, coeff):
+def _to_coo_operator(d, bitstring_matrix_conn, string2address_hash, amplitudes, coeff):
+    """Helper function to form the sparse representation of a Pauli operator in a subspace."""
     row_ids = np.arange(d)
     conn_ele_mask = []
     col_array = []
-    connected_bs_strings = _bitarray2string(np.array(connected_bs))
-    for j in range(len(connected_bs_strings)):
-        string_rep = connected_bs_strings[j]
-        conn_ele_mask.append(string_rep in my_dict_strings)
+    bitstring_matrix_conn_strings = _bitarray2string(np.array(bitstring_matrix_conn))
+    for j in range(len(bitstring_matrix_conn_strings)):
+        string_rep = bitstring_matrix_conn_strings[j]
+        conn_ele_mask.append(string_rep in string2address_hash)
         if conn_ele_mask[-1]:
-            col_array.append(my_dict_strings[string_rep])
+            col_array.append(string2address_hash[string_rep])
     conn_ele_mask = np.array(conn_ele_mask)
     matrix_elements = amplitudes[conn_ele_mask]
     row_ids = row_ids[conn_ele_mask]
@@ -177,7 +178,14 @@ def sort_and_remove_duplicates(bitstring_matrix: np.ndarray) -> np.ndarray:
         Sorted version of ``bitstring_matrix`` without repeated rows.
 
     """
-    bsmat_asints = _int_conversion_from_bts_matrix_vmap(bitstring_matrix)
+    if bitstring_matrix.shape[1] <= 63:
+        bsmat_asints = _int_conversion_from_bts_matrix_vmap(bitstring_matrix)
+    else:
+        bitstring_matrix = np.array(bitstring_matrix)
+        bsmat_asints = [
+            sum(int(bit) * (1 << i) for i, bit in enumerate(bits[::-1]))
+            for bits in bitstring_matrix
+        ]
 
     _, indices = np.unique(bsmat_asints, return_index=True)
 
