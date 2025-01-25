@@ -23,6 +23,7 @@ from qiskit.quantum_info import Pauli, SparsePauliOp
 from scipy.sparse import coo_matrix, spmatrix
 from scipy.sparse.linalg import eigsh
 from numba import njit
+import warnings
 import concurrent.futures
 
 config.update("jax_enable_x64", True)  # To deal with large integers
@@ -78,7 +79,7 @@ def solve_qubit(
 
 def project_operator_to_subspace(
     bitstring_matrix: np.ndarray,
-    hamiltonian: SparsePauliOp,
+    hamiltonian: SparsePauliOp | Pauli,
     *,
     verbose: bool = False,
     multithreaded: bool = False,
@@ -121,6 +122,9 @@ def project_operator_to_subspace(
         ValueError: Bitstrings (rows) in ``bitstring_matrix`` must have length < ``64``.
 
     """
+    if isinstance(hamiltonian, Pauli):
+        op_str = hamiltonian.to_label()
+        hamiltonian = SparsePauliOp([op_str], [1.0])
     d, n = bitstring_matrix.shape
     t = len(hamiltonian.coeffs)
 
@@ -186,7 +190,13 @@ def project_operator_to_subspace(
     return operator
 
 
-def _to_coo_operator(d, bitstring_matrix_conn, string2address_hash, amplitudes, coeff):
+def _to_coo_operator(
+    d: int,
+    bitstring_matrix_conn: np.ndarray,
+    string2address_hash: dict,
+    amplitudes: list | np.ndarray,
+    coeff: complex,
+):
     """Helper function to form the sparse representation of a Pauli operator in a subspace."""
     row_ids = np.arange(d)
     conn_ele_mask = []
@@ -235,7 +245,7 @@ def sort_and_remove_duplicates(bitstring_matrix: np.ndarray) -> np.ndarray:
 
 
 @njit(parallel=False)
-def _bitarray2string(bitstring_matrix):
+def _bitarray2string(bitstring_matrix: np.ndarray):
     """Fast conversion of a bitarray to strings using JIT on with numba.
 
     Args:
@@ -291,6 +301,11 @@ def matrix_elements_from_pauli(
         - The row indices corresponding to non-zero matrix elements
         - The column indices corresponding to non-zero matrix elements
     """
+    warnings.warn(
+        "This function is being deprecated in favor of the more general``project_operator_to_subspace``.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     d, n_qubits = bitstring_matrix.shape
     row_ids = np.arange(d)
 
