@@ -22,6 +22,7 @@ from numpy.typing import NDArray
 from qiskit.quantum_info import Pauli, SparsePauliOp
 from scipy.sparse import coo_matrix, spmatrix
 from scipy.sparse.linalg import eigsh
+from numba import njit
 
 config.update("jax_enable_x64", True)  # To deal with large integers
 
@@ -143,6 +144,26 @@ def project_operator_to_subspace(
     return operator
 
 
+def _to_coo_operator(d, connected_bs, my_dict_strings, amplitudes, coeff):
+    row_ids = np.arange(d)
+    conn_ele_mask = []
+    col_array = []
+    connected_bs_strings = _bitarray2string(np.array(connected_bs))
+    for j in range(len(connected_bs_strings)):
+        string_rep = connected_bs_strings[j]
+        conn_ele_mask.append(string_rep in my_dict_strings)
+        if conn_ele_mask[-1]:
+            col_array.append(my_dict_strings[string_rep])
+    conn_ele_mask = np.array(conn_ele_mask)
+    matrix_elements = amplitudes[conn_ele_mask]
+    row_ids = row_ids[conn_ele_mask]
+
+    if len(matrix_elements) > 0:
+        return coeff * coo_matrix((matrix_elements, (row_ids, col_array)), (d, d))
+    else:
+        return coo_matrix((d, d), dtype="complex128")
+
+
 def sort_and_remove_duplicates(bitstring_matrix: np.ndarray) -> np.ndarray:
     """Sort a bitstring matrix and remove duplicate entries.
 
@@ -161,6 +182,27 @@ def sort_and_remove_duplicates(bitstring_matrix: np.ndarray) -> np.ndarray:
     _, indices = np.unique(bsmat_asints, return_index=True)
 
     return bitstring_matrix[indices, :]
+
+
+@njit(parallel=False)
+def _bitarray2string(bitstring_matrix):
+    """Fast conversion of a bitarray to strings using JIT on with numba.
+
+    Args:
+        bitstring_matrix: A 2D array of ``bool`` representations of bit
+            values such that each row represents a single bitstring.
+
+    Returns:
+        List of strings representing the bitstring matrix.
+    """
+    d, n = bitstring_matrix.shape
+    string_rep_list = []
+    for i in range(d):
+        string_rep = ""
+        for j in range(n):
+            string_rep += str(int(bitstring_matrix[i][j]))
+        string_rep_list.append(string_rep)
+    return string_rep_list
 
 
 def matrix_elements_from_pauli(
@@ -275,6 +317,10 @@ _connected_elements_and_amplitudes_bool_vmap_over_bitstrings = jit(
     vmap(_connected_elements_and_amplitudes_bool, (0, None, None, None), 0)
 )
 
+"""Same as ``_connected_elements_and_amplitudes_jnp_bool()`` but allows to deal
+with 2D arrays of bitstrings and 2D arrays of Pauli operators through the ``vmap``\
+transformation of Jax. Also JIT compiled.
+"""
 _connected_elements_and_amplitudes_bool_vmap_over_bitstrings_and_paulis = jit(
     vmap(
         vmap(_connected_elements_and_amplitudes_bool, (0, None, None, None), 0), (None, 0, 0, 0), 0
