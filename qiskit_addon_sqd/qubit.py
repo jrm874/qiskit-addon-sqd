@@ -146,10 +146,8 @@ def project_operator_to_subspace(
     operator = coo_matrix((d, d), dtype="complex128")
 
     # Hash table to identify bitstrings in the subspace with their position in the array
-    string2address_hash = {
-        "".join("1" if bit else "0" for bit in value): index
-        for index, value in enumerate(bitstring_matrix)
-    }
+    strings_bitstring_matrix = _bitarray2string(np.array(bitstring_matrix))
+    string2address_hash = {value: index for index, value in enumerate(strings_bitstring_matrix)}
 
     if multithreaded:
         with concurrent.futures.ThreadPoolExecutor() as executor:
